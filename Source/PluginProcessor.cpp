@@ -13,6 +13,7 @@ SampleGrabAudioProcessor::SampleGrabAudioProcessor()
                        )
 #endif
 {
+    formatManager.registerBasicFormats();
 }
 
 SampleGrabAudioProcessor::~SampleGrabAudioProcessor() {}
@@ -28,8 +29,15 @@ void SampleGrabAudioProcessor::setCurrentProgram (int index) {}
 const juce::String SampleGrabAudioProcessor::getProgramName (int index) { return {}; }
 void SampleGrabAudioProcessor::changeProgramName (int index, const juce::String& newName) {}
 
-void SampleGrabAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock) {}
-void SampleGrabAudioProcessor::releaseResources() {}
+void SampleGrabAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+{
+    transportSource.prepareToPlay (samplesPerBlock, sampleRate);
+}
+
+void SampleGrabAudioProcessor::releaseResources()
+{
+    transportSource.releaseResources();
+}
 
 #ifndef JucePlugin_PreferredChannelConfigurations
 bool SampleGrabAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -59,12 +67,36 @@ void SampleGrabAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
+
+    if (transportSource.isPlaying())
+    {
+        juce::AudioSourceChannelInfo info(&buffer, 0, buffer.getNumSamples());
+        transportSource.getNextAudioBlock(info);
+    }
 }
 
 bool SampleGrabAudioProcessor::hasEditor() const { return true; }
 juce::AudioProcessorEditor* SampleGrabAudioProcessor::createEditor() { return new SampleGrabAudioProcessorEditor (*this); }
 void SampleGrabAudioProcessor::getStateInformation (juce::MemoryBlock& destData) {}
 void SampleGrabAudioProcessor::setStateInformation (const void* data, int sizeInBytes) {}
+
+void SampleGrabAudioProcessor::loadFile(const juce::String& path)
+{
+    auto file = juce::File(path);
+    if (!file.existsAsFile()) return;
+    
+    auto* reader = formatManager.createReaderFor(file);
+    if (reader != nullptr)
+    {
+        std::unique_ptr<juce::AudioFormatReaderSource> newSource(new juce::AudioFormatReaderSource(reader, true));
+        transportSource.setSource(newSource.get(), 0, nullptr, reader->sampleRate);
+        readerSource.reset(newSource.release());
+    }
+}
+
+void SampleGrabAudioProcessor::playPreview() { transportSource.setPosition(0.0); transportSource.start(); }
+void SampleGrabAudioProcessor::stopPreview() { transportSource.stop(); }
+bool SampleGrabAudioProcessor::isPreviewPlaying() const { return transportSource.isPlaying(); }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {

@@ -32,36 +32,62 @@ def main():
         return
         
     import time
+    import re
     timestamp = int(time.time())
-    output_template = os.path.join(out_dir, f"%(id)s_{timestamp}.%(ext)s")
+    # Use the video title in the output filename and restrict special characters to prevent C++ pipe issues
+    output_template = os.path.join(out_dir, f"%(title).150s_{timestamp}.%(ext)s")
     
-    try:
-        ydl_opts = {
-            'format': 'bestaudio/best',
+    def my_hook(d):
+        if d['status'] == 'downloading':
+            percent_str = d.get('_percent_str', '')
+            if percent_str:
+                ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+                clean_str = ansi_escape.sub('', percent_str).strip().replace('%', '')
+                try:
+                    percent = float(clean_str)
+                    print(json.dumps({"progress": percent, "status": "Downloading..."}), flush=True)
+                except Exception:
+                    pass
+        elif d['status'] == 'finished':
+            print(json.dumps({"progress": 100.0, "status": "Processing audio..."}), flush=True)
+
+    audio_file = None
+
+    if os.path.isfile(url):
+        print(json.dumps({"status": "Local file detected. Skipping download..."}), flush=True)
+        audio_file = url
+    else:
+        try:
+            ydl_opts = {
+                'format': 'bestaudio/best',
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'wav',
+                'preferredcodec': 'flac',
             }],
             'outtmpl': output_template,
+            'restrictfilenames': True,
             'quiet': True,
             'no_warnings': True,
-            'noplaylist': True
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-            wav_file = os.path.splitext(filename)[0] + ".wav"
-    except Exception as e:
-        print(json.dumps({"error": f"yt-dlp error: {str(e)}"}))
-        return
-        
-    if not os.path.exists(wav_file):
-        print(json.dumps({"error": "Downloaded wav file not found."}))
-        return
+                'noplaylist': True,
+                'progress_hooks': [my_hook]
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                filename = ydl.prepare_filename(info)
+                audio_file = os.path.splitext(filename)[0] + ".flac"
+        except Exception as e:
+            print(json.dumps({"error": f"yt-dlp error: {str(e)}"}))
+            return
+            
+        if not os.path.exists(audio_file):
+            print(json.dumps({"error": "Downloaded flac file not found."}))
+            return
+
+    print(json.dumps({"status": "Analyzing BPM and Key..."}), flush=True)
 
     try:
         # Load audio
-        y, sr = librosa.load(wav_file, sr=None)
+        y, sr = librosa.load(audio_file, sr=None)
         
         # BPM
         tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
@@ -80,14 +106,45 @@ def main():
         min_key = pitch_classes[min_idx] + " Min"
         dual_key_str = f"{maj_key} / {min_key}"
         
-        # Print JSON ensuring it is the only stdout block starting and ending with braces
-        print(json.dumps({
-            "file": wav_file,
+        result_data = {
+            "file": audio_file,
             "bpm": round(bpm, 2),
-            "key": dual_key_str
-        }))
+            "key": dual_key_str,
+            "timestamp": timestamp
+        }
+        
+        # Save to history.json
+        try:
+            appdata = os.environ.get('APPDATA', '')
+            if appdata:
+                history_dir = os.path.join(appdata, "jerryrpt", "SampleGrab")
+                os.makedirs(history_dir, exist_ok=True)
+                history_file = os.path.join(history_dir, "history.json")
+                
+                history_list = []
+                if os.path.exists(history_file):
+                    with open(history_file, 'r', encoding='utf-8') as f:
+                        try:
+                            history_list = json.load(f)
+                        except json.JSONDecodeError:
+                            pass
+                
+                # Prepend new entry so newest is first
+                history_list.insert(0, result_data)
+                
+                # Keep only last 50 entries
+                if len(history_list) > 50:
+                    history_list = history_list[:50]
+                    
+                with open(history_file, 'w', encoding='utf-8') as f:
+                    json.dump(history_list, f, indent=4)
+        except Exception:
+            pass # Fail silently if history cannot be written
+
+        # Print JSON ensuring it is the only stdout block starting and ending with braces
+        print(json.dumps(result_data), flush=True)
     except Exception as e:
-        print(json.dumps({"error": f"librosa error: {str(e)}"}))
+        print(json.dumps({"error": f"librosa error: {str(e)}"}), flush=True)
 
 if __name__ == "__main__":
     main()
