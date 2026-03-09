@@ -1,0 +1,42 @@
+# CMake / Visual Studio Outputs
+build/
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+*.ilk
+*.suo
+*.user
+*.pdb
+*.idb
+*.ncb
+*.tlog
+*.log
+*.vs/
+.vs/
+Debug/
+Release/
+x64/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+
+# Inno Setup Outputs
+Output/
+
+# Python caching
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Audio / local test files
+Downloads/
+*.wav
+*.mp3
+
+# macOS specific
+.DS_Store
