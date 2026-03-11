@@ -89,22 +89,65 @@ def main():
         # Load audio
         y, sr = librosa.load(audio_file, sr=None)
         
-        # BPM
-        tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
-        bpm = float(np.mean(tempo))
+        # Separate harmonic and percussive components for much better analysis accuracy
+        y_harmonic, y_percussive = librosa.effects.hpss(y)
+
+        # BPM Detection (using percussive component and tempogram to fix polyrhythms)
+        onset_env = librosa.onset.onset_strength(y=y_percussive, sr=sr)
+        tg = librosa.feature.tempogram(onset_envelope=onset_env, sr=sr)
+        freqs = librosa.tempo_frequencies(tg.shape[0], hop_length=512, sr=sr)
+        mean_tg = np.mean(tg, axis=1)
+
+        # Filter out extreme frequencies to focus on standard hip-hop/pop ranges
+        valid_idx = (freqs > 60) & (freqs < 200)
+        freqs = freqs[valid_idx]
+        mean_tg = mean_tg[valid_idx]
+
+        top_indices = np.argsort(mean_tg)[::-1][:5]
+        best_tempos = freqs[top_indices]
+
+        tempo = best_tempos[0] if len(best_tempos) > 0 else 120.0
+
+        # Check for triplet/dotted-8th polyrhythm confusion
+        # Modern trap beats often have bouncy hi-hats that trick the algorithm into picking a 4/3 or 3/2 multiple.
+        for t in best_tempos[1:]:
+            ratio = tempo / t
+            # If dominant tempo is 4/3 or 3/2 of another strong tempo, the slower one is the true quarter note
+            if abs(ratio - 1.3333) < 0.05 or abs(ratio - 1.5) < 0.05:
+                tempo = t
+                break
+
+        # Round to nearest integer (most DAW projects use exact integers like 100, 140, etc.)
+        bpm = float(round(tempo))
         
-        # Key Estimation
-        chroma = librosa.feature.chroma_stft(y=y, sr=sr)
-        chroma_vals = np.sum(chroma, axis=1)
+        # Key Estimation (using harmonic component and Krumhansl-Schmuckler profiles)
         pitch_classes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-        
-        # Calculate Major index and Relative Minor index (3 semitones down)
-        maj_idx = np.argmax(chroma_vals)
-        min_idx = (maj_idx - 3) % 12
-        
-        maj_key = pitch_classes[maj_idx] + " Maj"
-        min_key = pitch_classes[min_idx] + " Min"
-        dual_key_str = f"{maj_key} / {min_key}"
+
+        # Use CQT for better pitch resolution
+        chroma = librosa.feature.chroma_cqt(y=y_harmonic, sr=sr)
+        chroma_mean = np.mean(chroma, axis=1)
+
+        # Krumhansl-Schmuckler profiles
+        major_profile = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
+        minor_profile = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
+
+        major_corrs = [np.corrcoef(chroma_mean, np.roll(major_profile, i))[0, 1] for i in range(12)]
+        minor_corrs = [np.corrcoef(chroma_mean, np.roll(minor_profile, i))[0, 1] for i in range(12)]
+
+        best_maj_idx = np.argmax(major_corrs)
+        best_min_idx = np.argmax(minor_corrs)
+
+        # Compare the correlation coefficients to see which key (Major or Minor) is a better fit
+        if major_corrs[best_maj_idx] >= minor_corrs[best_min_idx]:
+            # Likely a Major key
+            maj_key = pitch_classes[best_maj_idx]
+            min_key = pitch_classes[(best_maj_idx - 3) % 12]
+            dual_key_str = f"{maj_key} Maj / {min_key} Min"
+        else:
+            # Likely a Minor key
+            min_key = pitch_classes[best_min_idx]
+            maj_key = pitch_classes[(best_min_idx + 3) % 12]
+            dual_key_str = f"{min_key} Min / {maj_key} Maj"
         
         result_data = {
             "file": audio_file,
@@ -144,7 +187,9 @@ def main():
         # Print JSON ensuring it is the only stdout block starting and ending with braces
         print(json.dumps(result_data), flush=True)
     except Exception as e:
-        print(json.dumps({"error": f"librosa error: {str(e)}"}), flush=True)
+        import traceback
+        err_msg = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+        print(json.dumps({"error": f"librosa error: {str(e)}", "traceback": err_msg}), flush=True)
 
 if __name__ == "__main__":
     main()
