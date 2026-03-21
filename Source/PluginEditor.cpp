@@ -70,11 +70,18 @@ SampleGrabAudioProcessorEditor::SampleGrabAudioProcessorEditor (SampleGrabAudioP
     keyLabel.setText("--", juce::dontSendNotification);
     keyLabel.setColour(juce::Label::textColourId, juce::Colour(0xffff007f)); // bright magenta
     addAndMakeVisible(keyLabel);
+
+    keyDetailLabel.setJustificationType(juce::Justification::centred);
+    keyDetailLabel.setFont(juce::FontOptions(12.5f, juce::Font::plain));
+    keyDetailLabel.setText("", juce::dontSendNotification);
+    keyDetailLabel.setColour(juce::Label::textColourId, juce::Colour(0xffc0c0c0));
+    addAndMakeVisible(keyDetailLabel);
     
     // The play feature is now handled via the WaveformDragZone
     if (audioProcessor.lastLoadedFile.isNotEmpty()) {
         bpmLabel.setText(audioProcessor.lastBpm, juce::dontSendNotification);
         keyLabel.setText(audioProcessor.lastKey, juce::dontSendNotification);
+        keyDetailLabel.setText(buildKeyDetailText(audioProcessor.lastAlternateKey, audioProcessor.lastTuningDisplay), juce::dontSendNotification);
         dragZone.setFile(audioProcessor.lastLoadedFile);
         statusLabel.setText("Status: Ready", juce::dontSendNotification);
         statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff55ff55));
@@ -98,7 +105,7 @@ SampleGrabAudioProcessorEditor::SampleGrabAudioProcessorEditor (SampleGrabAudioP
     
     historyList.setModel(this);
     historyList.setColour(juce::ListBox::backgroundColourId, juce::Colour(0xff111111));
-    historyList.setRowHeight(40);
+    historyList.setRowHeight(48);
     historyList.setVisible(false);
     addChildComponent(historyList);
     
@@ -166,17 +173,19 @@ void SampleGrabAudioProcessorEditor::resized()
     
     area.removeFromTop(15);
     
-    auto statsArea = area.removeFromTop(80);
+    auto statsArea = area.removeFromTop(92);
     statsBox.setBounds(statsArea); 
     
     auto halfWidth = statsArea.getWidth() / 2;
     auto leftStats = statsArea.removeFromLeft(halfWidth);
+    auto rightStats = statsArea;
     
-    bpmTitleLabel.setBounds(leftStats.removeFromTop(30).withTrimmedTop(10));
-    bpmLabel.setBounds(leftStats);
+    bpmTitleLabel.setBounds(leftStats.removeFromTop(24).withTrimmedTop(8));
+    bpmLabel.setBounds(leftStats.reduced(0, 4));
     
-    keyTitleLabel.setBounds(statsArea.removeFromTop(30).withTrimmedTop(10));
-    keyLabel.setBounds(statsArea);
+    keyTitleLabel.setBounds(rightStats.removeFromTop(24).withTrimmedTop(8));
+    keyLabel.setBounds(rightStats.removeFromTop(36));
+    keyDetailLabel.setBounds(rightStats.withTrimmedBottom(6));
     
     area.removeFromTop(15);
     // playBtn removed, the space is now given to the waveform drag zone natively
@@ -274,22 +283,23 @@ void SampleGrabAudioProcessorEditor::run()
                                         editor->repaint();
                                     }
                                 });
-                            } else if (obj->hasProperty("file") && obj->hasProperty("bpm") && obj->hasProperty("key")) {
+                            } else if (obj->hasProperty("file") && obj->hasProperty("bpm")
+                                       && (obj->hasProperty("key") || obj->hasProperty("display_key") || obj->hasProperty("primary_key"))) {
                                 juce::String file = obj->getProperty("file").toString();
                                 juce::String bpm = obj->getProperty("bpm").toString();
-                                juce::String key = obj->getProperty("key").toString();
-                                juce::MessageManager::callAsync([safeThis = juce::Component::SafePointer<SampleGrabAudioProcessorEditor>(this), file, bpm, key]() {
+                                juce::String primaryKey = obj->hasProperty("primary_key") ? obj->getProperty("primary_key").toString()
+                                                                                            : (obj->hasProperty("display_key") ? obj->getProperty("display_key").toString()
+                                                                                                                               : obj->getProperty("key").toString());
+                                juce::String displayKey = obj->hasProperty("display_key") ? obj->getProperty("display_key").toString()
+                                                                                            : (obj->hasProperty("key") ? obj->getProperty("key").toString()
+                                                                                                                       : primaryKey);
+                                juce::String alternateKey = obj->hasProperty("alternate_key") ? obj->getProperty("alternate_key").toString() : "";
+                                juce::String tuningDisplay = obj->hasProperty("tuning_display") ? obj->getProperty("tuning_display").toString() : "";
+                                juce::MessageManager::callAsync([safeThis = juce::Component::SafePointer<SampleGrabAudioProcessorEditor>(this), file, bpm, primaryKey, alternateKey, displayKey, tuningDisplay]() {
                                     if (auto* editor = safeThis.getComponent()) {
                                         editor->statusLabel.setText("Status: Analysis Complete!", juce::dontSendNotification);
                                         editor->statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff55ff55));
-                                        editor->bpmLabel.setText(bpm, juce::dontSendNotification);
-                                        editor->keyLabel.setText(key, juce::dontSendNotification);
-                                        editor->dragZone.setFile(file);
-                                        editor->audioProcessor.loadFile(file);
-                                        editor->audioProcessor.lastLoadedFile = file;
-                                        editor->audioProcessor.lastBpm = bpm;
-                                        editor->audioProcessor.lastKey = key;
-                                        // The waveform automatically handles playback states now
+                                        editor->applyAnalysisResult(file, bpm, primaryKey, alternateKey, displayKey, tuningDisplay);
                                         editor->isDownloading = false;
                                         editor->downloadProgress = -1.0;
                                         editor->loadHistory();
@@ -337,6 +347,43 @@ void SampleGrabAudioProcessorEditor::run()
     }
 }
 
+juce::String SampleGrabAudioProcessorEditor::buildKeyDetailText(const juce::String& alternateKey, const juce::String& tuningDisplay)
+{
+    juce::String detail;
+
+    if (alternateKey.isNotEmpty())
+        detail << alternateKey;
+
+    if (tuningDisplay.isNotEmpty()) {
+        if (detail.isNotEmpty())
+            detail << " | ";
+        detail << tuningDisplay;
+    }
+
+    return detail;
+}
+
+void SampleGrabAudioProcessorEditor::applyAnalysisResult(const juce::String& file,
+                                                         const juce::String& bpm,
+                                                         const juce::String& primaryKey,
+                                                         const juce::String& alternateKey,
+                                                         const juce::String& displayKey,
+                                                         const juce::String& tuningDisplay)
+{
+    auto mainKey = displayKey.isNotEmpty() ? displayKey : (primaryKey.isNotEmpty() ? primaryKey : juce::String("--"));
+
+    bpmLabel.setText(bpm, juce::dontSendNotification);
+    keyLabel.setText(mainKey, juce::dontSendNotification);
+    keyDetailLabel.setText(buildKeyDetailText(alternateKey, tuningDisplay), juce::dontSendNotification);
+    dragZone.setFile(file);
+    audioProcessor.loadFile(file);
+    audioProcessor.lastLoadedFile = file;
+    audioProcessor.lastBpm = bpm;
+    audioProcessor.lastKey = mainKey;
+    audioProcessor.lastAlternateKey = alternateKey;
+    audioProcessor.lastTuningDisplay = tuningDisplay;
+}
+
 bool SampleGrabAudioProcessorEditor::isInterestedInFileDrag(const juce::StringArray& files)
 {
     for (auto file : files) {
@@ -374,11 +421,19 @@ void SampleGrabAudioProcessorEditor::loadHistory()
             for (auto& item : *arr) {
                 if (item.isObject()) {
                     auto* obj = item.getDynamicObject();
-                    if (obj->hasProperty("file") && obj->hasProperty("bpm") && obj->hasProperty("key")) {
+                    if (obj->hasProperty("file") && obj->hasProperty("bpm")
+                        && (obj->hasProperty("key") || obj->hasProperty("display_key") || obj->hasProperty("primary_key"))) {
                         HistoryItem hi;
                         hi.file = obj->getProperty("file").toString();
                         hi.bpm = obj->getProperty("bpm").toString();
-                        hi.key = obj->getProperty("key").toString();
+                        hi.primaryKey = obj->hasProperty("primary_key") ? obj->getProperty("primary_key").toString() : "";
+                        hi.alternateKey = obj->hasProperty("alternate_key") ? obj->getProperty("alternate_key").toString() : "";
+                        hi.tuningDisplay = obj->hasProperty("tuning_display") ? obj->getProperty("tuning_display").toString() : "";
+                        hi.displayKey = obj->hasProperty("display_key") ? obj->getProperty("display_key").toString()
+                                                                         : (obj->hasProperty("key") ? obj->getProperty("key").toString()
+                                                                                                    : hi.primaryKey);
+                        if (hi.primaryKey.isEmpty())
+                            hi.primaryKey = hi.displayKey;
                         historyItems.add(hi);
                     }
                 }
@@ -407,13 +462,20 @@ void SampleGrabAudioProcessorEditor::paintListBoxItem(int rowNumber, juce::Graph
     auto& item = historyItems.getReference(rowNumber);
     
     g.setColour(juce::Colours::white);
-    g.setFont(juce::FontOptions(14.0f));
+    g.setFont(juce::FontOptions(14.0f, juce::Font::bold));
     juce::String filename = juce::File(item.file).getFileName();
-    g.drawText(filename, 10, 0, width - 120, height, juce::Justification::centredLeft, true);
+    g.drawText(filename, 10, 2, width - 20, 20, juce::Justification::centredLeft, true);
     
     g.setColour(juce::Colour(0xffaaaaaa));
     g.setFont(juce::FontOptions(12.0f));
-    g.drawText(item.bpm + " BPM | " + item.key, width - 130, 0, 120, height, juce::Justification::centredRight, true);
+    juce::String detail = item.bpm + " BPM";
+    if (item.displayKey.isNotEmpty())
+        detail << " | " << item.displayKey;
+    if (item.alternateKey.isNotEmpty())
+        detail << " | " << item.alternateKey;
+    if (item.tuningDisplay.isNotEmpty())
+        detail << " | " << item.tuningDisplay;
+    g.drawText(detail, 10, 22, width - 20, 16, juce::Justification::centredLeft, true);
     
     g.setColour(juce::Colour(0xff222222));
     g.drawLine(10.0f, (float)height - 1.0f, (float)width - 10.0f, (float)height - 1.0f, 1.0f);
@@ -424,12 +486,6 @@ void SampleGrabAudioProcessorEditor::listBoxItemClicked(int row, const juce::Mou
     if (row < 0 || row >= historyItems.size()) return;
     
     auto& item = historyItems.getReference(row);
-    
-    bpmLabel.setText(item.bpm, juce::dontSendNotification);
-    keyLabel.setText(item.key, juce::dontSendNotification);
-    dragZone.setFile(item.file);
-    audioProcessor.loadFile(item.file);
-    audioProcessor.lastLoadedFile = item.file;
-    audioProcessor.lastBpm = item.bpm;
-    audioProcessor.lastKey = item.key;
+
+    applyAnalysisResult(item.file, item.bpm, item.primaryKey, item.alternateKey, item.displayKey, item.tuningDisplay);
 }

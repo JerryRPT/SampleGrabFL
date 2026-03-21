@@ -295,6 +295,7 @@ private:
     juce::Label bpmLabel;
     juce::Label keyTitleLabel;
     juce::Label keyLabel;
+    juce::Label keyDetailLabel;
     
     WaveformDragZone dragZone;
     
@@ -304,12 +305,22 @@ private:
     struct HistoryItem {
         juce::String file;
         juce::String bpm;
-        juce::String key;
+        juce::String primaryKey;
+        juce::String alternateKey;
+        juce::String tuningDisplay;
+        juce::String displayKey;
     };
     juce::Array<HistoryItem> historyItems;
     juce::ListBox historyList;
     bool showHistory = false;
     void loadHistory();
+    void applyAnalysisResult(const juce::String& file,
+                             const juce::String& bpm,
+                             const juce::String& primaryKey,
+                             const juce::String& alternateKey,
+                             const juce::String& displayKey,
+                             const juce::String& tuningDisplay);
+    static juce::String buildKeyDetailText(const juce::String& alternateKey, const juce::String& tuningDisplay);
     
     // ListBoxModel overrides
     int getNumRows() override;

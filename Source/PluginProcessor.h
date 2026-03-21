@@ -43,6 +43,8 @@ public:
     juce::String lastLoadedFile;
     juce::String lastBpm = "--";
     juce::String lastKey = "--";
+    juce::String lastAlternateKey;
+    juce::String lastTuningDisplay;
     
     juce::AudioFormatManager formatManager;
 
