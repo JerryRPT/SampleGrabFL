@@ -1,47 +1,57 @@
 #pragma once
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
+#include "BinaryData.h"
 
+// ─── Liquid Glass LookAndFeel ────────────────────────────────────────
 class CustomLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
     CustomLookAndFeel()
     {
         setDefaultSansSerifTypefaceName ("Karla");
-        setColour (juce::TextButton::buttonColourId, juce::Colour (0xff1a1a1a));
-        setColour (juce::TextButton::textColourOffId, juce::Colours::white);
-        setColour (juce::TextEditor::backgroundColourId, juce::Colour (0xff151515));
-        setColour (juce::TextEditor::textColourId, juce::Colours::white);
+        // Frosted glass button
+        setColour (juce::TextButton::buttonColourId, juce::Colour (0x40ffffff));
+        setColour (juce::TextButton::textColourOffId, juce::Colour (0xff1a3a5c));
+        // Frosted glass text editor
+        setColour (juce::TextEditor::backgroundColourId, juce::Colour (0x38ffffff));
+        setColour (juce::TextEditor::textColourId, juce::Colour (0xff1a3a5c));
         setColour (juce::TextEditor::outlineColourId, juce::Colour (0x00000000));
-        setColour (juce::TextEditor::focusedOutlineColourId, juce::Colour (0x55ff0000)); // Subtle red glow
-        setColour (juce::Label::textColourId, juce::Colours::lightgrey);
+        setColour (juce::TextEditor::focusedOutlineColourId, juce::Colour (0x667ba7cc));
+        setColour (juce::Label::textColourId, juce::Colour (0xff3a6a8a));
     }
     
     void drawButtonBackground (juce::Graphics& g, juce::Button& button, const juce::Colour& backgroundColour,
                                bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override
     {
         auto bounds = button.getLocalBounds().toFloat();
-        auto cornerSize = 8.0f;
+        auto cornerSize = 10.0f;
         
         juce::Colour baseColour = backgroundColour;
-        if (shouldDrawButtonAsDown || shouldDrawButtonAsHighlighted)
-            baseColour = baseColour.brighter (0.1f);
+        if (shouldDrawButtonAsDown)
+            baseColour = juce::Colour (0x55ffffff);
+        else if (shouldDrawButtonAsHighlighted)
+            baseColour = juce::Colour (0x50ffffff);
             
+        // Frosted glass fill
         g.setColour(baseColour);
         g.fillRoundedRectangle (bounds, cornerSize);
         
-        g.setColour (juce::Colour(0x66ff0000)); // Soft Red border 
-        if (button.isMouseOver())
-            g.drawRoundedRectangle(bounds.reduced(0.5f), cornerSize, 1.5f);
-        else
-            g.drawRoundedRectangle(bounds.reduced(0.5f), cornerSize, 1.0f);
+        // Subtle glass border (top-highlight for depth)
+        g.setColour (juce::Colour(0x55ffffff));
+        g.drawRoundedRectangle(bounds.reduced(0.5f), cornerSize, 1.2f);
+        
+        // Bottom shadow line for 3D glass effect
+        g.setColour (juce::Colour(0x18000000));
+        g.drawLine(bounds.getX() + cornerSize, bounds.getBottom() - 0.5f,
+                   bounds.getRight() - cornerSize, bounds.getBottom() - 0.5f, 0.8f);
     }
 
     void drawTextEditorOutline (juce::Graphics& g, int width, int height, juce::TextEditor& textEditor) override
     {
-        auto cornerSize = 8.0f;
-        g.setColour(juce::Colour(0xff2a2a2a));
-        g.drawRoundedRectangle (0.5f, 0.5f, width - 1.0f, height - 1.0f, cornerSize, 1.0f);
+        auto cornerSize = 10.0f;
+        g.setColour(juce::Colour(0x44ffffff));
+        g.drawRoundedRectangle (0.5f, 0.5f, width - 1.0f, height - 1.0f, cornerSize, 1.2f);
         
         if (textEditor.hasKeyboardFocus(true) && !textEditor.isReadOnly())
         {
@@ -53,10 +63,11 @@ public:
     void fillTextEditorBackground (juce::Graphics& g, int width, int height, juce::TextEditor& textEditor) override
     {
         g.setColour (findColour (juce::TextEditor::backgroundColourId));
-        g.fillRoundedRectangle(0.0f, 0.0f, (float)width, (float)height, 8.0f);
+        g.fillRoundedRectangle(0.0f, 0.0f, (float)width, (float)height, 10.0f);
     }
 };
 
+// ─── Waveform Drag Zone ──────────────────────────────────────────────
 class WaveformDragZone : public juce::Component, public juce::ChangeListener
 {
 public:
@@ -75,28 +86,28 @@ public:
     void paint(juce::Graphics& g) override
     {
         auto bounds = getLocalBounds().toFloat();
-        auto cornerSize = 12.0f;
+        auto cornerSize = 14.0f;
 
         if (filePath.isEmpty() || thumbnail.getNumChannels() == 0) {
-            g.setColour(juce::Colour(0xff181818));
+            // Empty state — frosted glass panel
+            g.setColour(juce::Colour(0x38ffffff));
             g.fillRoundedRectangle(bounds, cornerSize);
             
-            g.setColour(juce::Colour(0xff333333));
-            g.drawRoundedRectangle(bounds.reduced(1.0f), cornerSize, 2.0f);
+            g.setColour(juce::Colour(0x55ffffff));
+            g.drawRoundedRectangle(bounds.reduced(1.0f), cornerSize, 1.5f);
             
-            g.setColour(juce::Colour(0xff555555));
+            g.setColour(juce::Colour(0xff6a9ab8));
             g.setFont(juce::FontOptions(18.0f, juce::Font::italic));
             g.drawText("Waiting for audio...", getLocalBounds(), juce::Justification::centred);
         } else {
-            // Flat dark background
-            g.setColour(juce::Colour(0xff111111));
+            // Waveform state — frosted glass with waveform
+            g.setColour(juce::Colour(0x30ffffff));
             g.fillRoundedRectangle(bounds, cornerSize);
             
-            auto waveBounds = bounds.reduced(10.0f).toNearestInt();
-            g.setColour(juce::Colour(0xffff0000)); // Solid Red Waveform
+            auto waveBounds = bounds.reduced(10.0f, 10.0f).withTrimmedBottom(20.0f).toNearestInt();
             
-            // Modern Segmented Bar Waveform Visualization
-            int numBars = waveBounds.getWidth() / 4; // 3px bar + 1px gap
+            // Waveform bars in deep blue
+            int numBars = waveBounds.getWidth() / 4;
             double totalLen = thumbnail.getTotalLength();
             if (totalLen > 0.0 && numBars > 0) {
                 double timePerBar = totalLen / numBars;
@@ -107,28 +118,31 @@ public:
                     float magnitude = std::max(std::abs(minValue), std::abs(maxValue));
                     float barHeight = std::max(2.0f, magnitude * waveBounds.getHeight());
                     
+                    // Gradient feel: bars fade from deep blue to lighter blue
+                    float alpha = 0.55f + 0.45f * magnitude;
+                    g.setColour(juce::Colour(0xff2e6da4).withAlpha(alpha));
                     g.fillRoundedRectangle(waveBounds.getX() + i * 4, waveBounds.getCentreY() - barHeight / 2.0f, 2.0f, barHeight, 1.0f);
                 }
             }
             
-            // Draw UI state overlay and Play Button
-            g.setColour(juce::Colour(0xff2a2a2a));
-            g.drawRoundedRectangle(bounds.reduced(1.0f), cornerSize, 2.0f);
+            // Glass border
+            g.setColour(juce::Colour(0x55ffffff));
+            g.drawRoundedRectangle(bounds.reduced(1.0f), cornerSize, 1.5f);
             
-            // Draw Play Button Container on the far left
+            // Play button — frosted circle-ish container
             auto playBtnBounds = bounds.removeFromLeft(40.0f).withTrimmedLeft(5.0f).withTrimmedRight(5.0f).reduced(5.0f);
-            g.setColour(juce::Colour(0xff1f1f1f));
-            g.fillRoundedRectangle(playBtnBounds, 4.0f);
-            g.setColour(juce::Colour(0xff333333));
-            g.drawRoundedRectangle(playBtnBounds, 4.0f, 1.0f);
+            g.setColour(juce::Colour(0x44ffffff));
+            g.fillRoundedRectangle(playBtnBounds, 6.0f);
+            g.setColour(juce::Colour(0x55ffffff));
+            g.drawRoundedRectangle(playBtnBounds, 6.0f, 1.0f);
             
             if (processor.isPreviewPlaying()) {
-                g.setColour(juce::Colours::white.withAlpha(0.9f));
+                g.setColour(juce::Colour(0xff1a3a5c));
                 auto iconBounds = playBtnBounds.withSizeKeepingCentre(12, 12);
                 g.fillRect(iconBounds.getX(), iconBounds.getY(), 4.0f, 12.0f);
                 g.fillRect(iconBounds.getRight() - 4.0f, iconBounds.getY(), 4.0f, 12.0f);
             } else {
-                g.setColour(juce::Colours::white.withAlpha(0.9f));
+                g.setColour(juce::Colour(0xff1a3a5c));
                 juce::Path playTriangle;
                 auto iconBounds = playBtnBounds.withSizeKeepingCentre(12, 14);
                 playTriangle.addTriangle(iconBounds.getX(), iconBounds.getY(), 
@@ -137,8 +151,8 @@ public:
                 g.fillPath(playTriangle);
             }
             
-            // Bold, high-opacity instructional text
-            g.setColour(juce::Colours::white);
+            // Instructional text
+            g.setColour(juce::Colour(0xff1a3a5c));
             g.setFont(juce::FontOptions(13.0f, juce::Font::bold));
             g.drawText("DRAG WAVEFORM TO EXPORT", bounds.reduced(10).toNearestInt(), juce::Justification::bottomRight);
         }
@@ -172,7 +186,6 @@ public:
         {
             auto playBtnBounds = getLocalBounds().toFloat().removeFromLeft(40.0f);
             if (playBtnBounds.contains(e.getPosition().toFloat())) {
-                // Clicked the play button specifically
                 if (processor.isPreviewPlaying()) {
                     processor.stopPreview();
                 } else {
@@ -208,25 +221,28 @@ private:
     juce::AudioThumbnail thumbnail;
 };
 
+// ─── Stats Box (Frosted Glass Panel) ─────────────────────────────────
 class StatsBox : public juce::Component
 {
 public:
     void paint(juce::Graphics& g) override {
         auto bounds = getLocalBounds().toFloat();
         
-        // Inner solid container
-        g.setColour(juce::Colour(0xff151515));
-        g.fillRoundedRectangle(bounds, 10.0f);
+        // Frosted glass panel
+        g.setColour(juce::Colour(0x38ffffff));
+        g.fillRoundedRectangle(bounds, 12.0f);
         
-        g.setColour(juce::Colour(0xff2a2a2a));
-        g.drawRoundedRectangle(bounds.reduced(0.5f), 10.0f, 1.5f);
+        // Glass highlight border
+        g.setColour(juce::Colour(0x55ffffff));
+        g.drawRoundedRectangle(bounds.reduced(0.5f), 12.0f, 1.5f);
         
-        // Separator line
-        g.setColour(juce::Colour(0xff333333));
+        // Separator line (subtle blue-ish)
+        g.setColour(juce::Colour(0x33a0c4e0));
         g.drawLine(bounds.getWidth() / 2.0f, 15.0f, bounds.getWidth() / 2.0f, bounds.getHeight() - 15.0f, 1.5f);
     }
 };
 
+// ─── Folder Button ───────────────────────────────────────────────────
 class FolderButton : public juce::Button
 {
 public:
@@ -235,10 +251,10 @@ public:
     {
         auto bounds = getLocalBounds().toFloat().reduced(2.0f);
         
-        juce::Colour colour = juce::Colour(0xff777777);
-        if (shouldDrawButtonAsHighlighted) colour = juce::Colours::white;
+        juce::Colour colour = juce::Colour(0xff7aadcc);
+        if (shouldDrawButtonAsHighlighted) colour = juce::Colour(0xff1a3a5c);
         if (shouldDrawButtonAsDown) {
-            colour = juce::Colour(0xffff0000); // Red
+            colour = juce::Colour(0xff2e6da4);
             bounds.translate(0.0f, 1.0f);
         }
         
@@ -257,6 +273,7 @@ public:
     }
 };
 
+// ─── Main Editor ─────────────────────────────────────────────────────
 class SampleGrabAudioProcessorEditor : public juce::AudioProcessorEditor, 
                                        private juce::Thread, 
                                        private juce::Timer,
@@ -279,6 +296,10 @@ public:
 private:
     SampleGrabAudioProcessor& audioProcessor;
     CustomLookAndFeel customLookAndFeel;
+
+    // Background + Logo images (loaded from BinaryData)
+    juce::Image backgroundImage;
+    juce::Image logoImage;
 
     juce::Label titleLabel;
     juce::TextEditor urlInput;

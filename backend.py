@@ -14,14 +14,9 @@ def is_tool_installed(name):
 
 def normalize_vector(vector, np):
     vector = np.asarray(vector, dtype=float)
-    total = float(np.sum(vector))
-    if total > 0.0:
-        vector = vector / total
-
     norm = float(np.linalg.norm(vector))
     if norm > 0.0:
         vector = vector / norm
-
     return vector
 
 
@@ -42,40 +37,87 @@ def tuning_to_hz(tuning_cents):
     return 440.0 * math.pow(2.0, tuning_cents / 1200.0)
 
 
-def score_profiles(chroma_vector, major_profile, minor_profile, np):
-    major_profile = normalize_vector(major_profile, np)
-    minor_profile = normalize_vector(minor_profile, np)
+def pearson_correlation(x, y, np):
+    """Compute Pearson correlation coefficient between two vectors."""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    x_mean = np.mean(x)
+    y_mean = np.mean(y)
+    x_centered = x - x_mean
+    y_centered = y - y_mean
+    numerator = float(np.dot(x_centered, y_centered))
+    denominator = float(np.sqrt(np.dot(x_centered, x_centered) * np.dot(y_centered, y_centered)))
+    if denominator < 1e-12:
+        return 0.0
+    return numerator / denominator
 
-    best = {
-        "score": float("-inf"),
-        "tonic_index": 0,
-        "is_major": True,
+
+def score_key_correlation(chroma_vector, np):
+    """Score chroma vector against key profiles using Pearson correlation
+    (the standard Krumhansl-Schmuckler algorithm)."""
+
+    # Profile sets: (major, minor)
+    profile_sets = [
+        # Krumhansl-Kessler (1990)
+        (
+            [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88],
+            [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17],
+        ),
+        # Temperley MIREX (2005)
+        (
+            [5.0, 2.0, 3.5, 2.0, 4.5, 4.0, 2.0, 4.5, 2.0, 3.5, 1.5, 4.0],
+            [5.0, 2.0, 3.5, 4.5, 2.0, 3.5, 2.0, 4.5, 3.5, 2.0, 1.5, 4.0],
+        ),
+        # Sha'ath (2011)
+        (
+            [6.6, 2.0, 3.5, 2.3, 4.6, 4.0, 2.5, 5.2, 2.4, 3.7, 2.3, 3.4],
+            [6.5, 2.7, 3.5, 5.4, 2.6, 3.5, 2.5, 5.2, 4.0, 2.7, 4.3, 3.2],
+        ),
+    ]
+
+    # scores[0..11] = major keys C..B, scores[12..23] = minor keys C..B
+    scores = np.zeros(24, dtype=float)
+
+    for major_p, minor_p in profile_sets:
+        major_p = np.array(major_p, dtype=float)
+        minor_p = np.array(minor_p, dtype=float)
+        for tonic in range(12):
+            scores[tonic] += pearson_correlation(chroma_vector, np.roll(major_p, tonic), np)
+            scores[12 + tonic] += pearson_correlation(chroma_vector, np.roll(minor_p, tonic), np)
+
+    best_idx = int(np.argmax(scores))
+    is_major = best_idx < 12
+    tonic_index = best_idx if is_major else best_idx - 12
+
+    return {
+        "score": float(scores[best_idx]),
+        "tonic_index": tonic_index,
+        "is_major": is_major,
+        "all_scores": scores,
     }
 
-    for tonic_index in range(12):
-        major_score = float(np.dot(chroma_vector, np.roll(major_profile, tonic_index)))
-        if major_score > best["score"]:
-            best = {
-                "score": major_score,
-                "tonic_index": tonic_index,
-                "is_major": True,
-            }
 
-        minor_score = float(np.dot(chroma_vector, np.roll(minor_profile, tonic_index)))
-        if minor_score > best["score"]:
-            best = {
-                "score": minor_score,
-                "tonic_index": tonic_index,
-                "is_major": False,
-            }
+def estimate_key(y, y_harmonic, sr, librosa, np, median_filter):
+    """Estimate musical key using bandpass-filtered chroma with Pearson correlation.
+    
+    Bandpass filtering to 200-4000Hz removes bass (808, sub) energy that biases
+    chroma toward subdominant/4th degree — the #1 cause of key misdetection
+    in hip-hop/electronic/trap beats.
+    """
+    from scipy.signal import butter, sosfilt
 
-    return best
+    tuning_bins = float(librosa.estimate_tuning(y=y, sr=sr, bins_per_octave=36))
 
+    # --- Bandpass filter: isolate melodic range (200Hz - 4kHz) ---
+    nyquist = sr / 2.0
+    low = max(200.0 / nyquist, 0.001)
+    high = min(4000.0 / nyquist, 0.999)
+    sos = butter(4, [low, high], btype='band', output='sos')
+    y_melodic = sosfilt(sos, y).astype(np.float32)
 
-def estimate_key(y_harmonic, sr, librosa, np, median_filter):
-    tuning_bins = float(librosa.estimate_tuning(y=y_harmonic, sr=sr, bins_per_octave=36))
-    chroma = librosa.feature.chroma_cqt(
-        y=y_harmonic,
+    # --- Chromagram 1: CQT on bandpass-filtered signal ---
+    chroma_cqt = librosa.feature.chroma_cqt(
+        y=y_melodic,
         sr=sr,
         hop_length=512,
         bins_per_octave=36,
@@ -83,35 +125,66 @@ def estimate_key(y_harmonic, sr, librosa, np, median_filter):
         tuning=tuning_bins,
     )
 
-    if chroma.size == 0:
-        raise RuntimeError("No harmonic chroma data was produced for key detection.")
+    if chroma_cqt.size == 0:
+        raise RuntimeError("No chroma data was produced for key detection.")
 
-    chroma = median_filter(chroma, size=(1, 9), mode="nearest")
-    rms = librosa.feature.rms(y=y_harmonic, frame_length=4096, hop_length=512)[0]
-    rms = rms[: chroma.shape[1]]
+    chroma_cqt = median_filter(chroma_cqt, size=(1, 9), mode="nearest")
 
-    if rms.size == 0:
-        weights = np.ones(chroma.shape[1], dtype=float)
+    # --- Chromagram 2: CENS on bandpass-filtered signal ---
+    chroma_cens_bp = librosa.feature.chroma_cens(
+        y=y_melodic,
+        sr=sr,
+        hop_length=512,
+        n_chroma=12,
+        bins_per_octave=36,
+    )
+
+    # --- Chromagram 3: CENS on full signal (as a tiebreaker) ---
+    chroma_cens_full = librosa.feature.chroma_cens(
+        y=y,
+        sr=sr,
+        hop_length=512,
+        n_chroma=12,
+        bins_per_octave=36,
+    )
+
+    # Energy weighting for CQT chroma (on melodic signal)
+    rms = librosa.feature.rms(y=y_melodic, frame_length=4096, hop_length=512)[0]
+    rms_cqt = rms[: chroma_cqt.shape[1]]
+
+    if rms_cqt.size == 0:
+        weights_cqt = np.ones(chroma_cqt.shape[1], dtype=float)
     else:
-        chroma_focus = np.max(chroma, axis=0)
-        weights = np.clip(rms, 0.0, None) * np.clip(chroma_focus, 0.0, None)
-        positive_weights = weights[weights > 0.0]
-        if positive_weights.size > 0:
-            floor = float(np.percentile(positive_weights, 35))
-            weights = np.where(weights >= floor, weights, 0.0)
+        chroma_focus = np.max(chroma_cqt, axis=0)
+        weights_cqt = np.clip(rms_cqt, 0.0, None) * np.clip(chroma_focus, 0.0, None)
+        pos = weights_cqt[weights_cqt > 0.0]
+        if pos.size > 0:
+            floor = float(np.percentile(pos, 20))
+            weights_cqt = np.where(weights_cqt >= floor, weights_cqt, 0.0)
+        if not np.any(weights_cqt > 0.0):
+            weights_cqt = np.ones(chroma_cqt.shape[1], dtype=float)
 
-        if not np.any(weights > 0.0):
-            weights = np.ones(chroma.shape[1], dtype=float)
+    # Build chroma vectors
+    vec_cqt = np.average(chroma_cqt, axis=1, weights=weights_cqt)
+    vec_cens_bp = np.mean(chroma_cens_bp, axis=1)
+    vec_cens_full = np.mean(chroma_cens_full, axis=1)
 
-    chroma_vector = np.average(chroma, axis=1, weights=weights)
-    chroma_vector = normalize_vector(chroma_vector, np)
+    # Score all three representations
+    result_cqt = score_key_correlation(vec_cqt, np)
+    result_cens_bp = score_key_correlation(vec_cens_bp, np)
+    result_cens_full = score_key_correlation(vec_cens_full, np)
 
-    major_profile = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
-    minor_profile = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
-    best = score_profiles(chroma_vector, major_profile, minor_profile, np)
+    # Ensemble: bandpass chromas weighted 2x (they're more reliable), full signal 1x
+    combined = (result_cqt["all_scores"] * 2.0
+                + result_cens_bp["all_scores"] * 2.0
+                + result_cens_full["all_scores"] * 1.0)
 
-    primary_key = key_name(best["tonic_index"], best["is_major"])
-    alternate_key = relative_key_name(best["tonic_index"], best["is_major"])
+    best_idx = int(np.argmax(combined))
+    is_major = best_idx < 12
+    tonic_index = best_idx if is_major else best_idx - 12
+
+    primary_key = key_name(tonic_index, is_major)
+    alternate_key = relative_key_name(tonic_index, is_major)
     tuning_cents = tuning_bins * 100.0
     tuning_hz = tuning_to_hz(tuning_cents)
 
@@ -257,7 +330,7 @@ def main():
                 break
 
         bpm = float(round(tempo))
-        key_data = estimate_key(y_harmonic, sr, librosa, np, median_filter)
+        key_data = estimate_key(y, y_harmonic, sr, librosa, np, median_filter)
 
         result_data = {
             "file": audio_file,

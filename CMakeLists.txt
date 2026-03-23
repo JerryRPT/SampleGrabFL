@@ -26,6 +26,12 @@ juce_add_plugin(SampleGrab
 
 juce_generate_juce_header(SampleGrab)
 
+juce_add_binary_data(SampleGrabAssets
+    SOURCES
+        assets/Rectangle\ 1\(1\).png
+        assets/SampleGrab.png
+)
+
 target_sources(SampleGrab
     PRIVATE
         Source/PluginProcessor.cpp
@@ -41,6 +47,7 @@ target_compile_definitions(SampleGrab
 
 target_link_libraries(SampleGrab
     PRIVATE
+        SampleGrabAssets
         juce::juce_audio_utils
         juce::juce_audio_processors
         juce::juce_gui_basics

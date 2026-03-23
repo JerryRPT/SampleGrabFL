@@ -4,19 +4,26 @@
 SampleGrabAudioProcessorEditor::SampleGrabAudioProcessorEditor (SampleGrabAudioProcessor& p)
     : AudioProcessorEditor (&p), juce::Thread("PythonBackendThread"), audioProcessor (p), dragZone(p)
 {
-    setSize (480, 440);
+    setSize (780, 520);
     setLookAndFeel(&customLookAndFeel);
 
+    // Load embedded images
+    backgroundImage = juce::ImageCache::getFromMemory(BinaryData::Rectangle_11_png, BinaryData::Rectangle_11_pngSize);
+    logoImage = juce::ImageCache::getFromMemory(BinaryData::SampleGrab_png, BinaryData::SampleGrab_pngSize);
+
+    // Title label (hidden if logo image is used, but kept as fallback)
     titleLabel.setText("SampleGrab", juce::dontSendNotification);
     titleLabel.setFont(juce::FontOptions(32.0f, juce::Font::bold));
     titleLabel.setJustificationType(juce::Justification::centred);
     titleLabel.setColour(juce::Label::textColourId, juce::Colour(0xffffffff));
-    addAndMakeVisible(titleLabel);
+    titleLabel.setVisible(false); // We use the logo image instead
+    addChildComponent(titleLabel); // Hidden — logo image is used instead
 
-    urlInput.setTextToShowWhenEmpty(" Paste YouTube URL or Drop Local File...", juce::Colour(0xff777777));
+    urlInput.setTextToShowWhenEmpty(" Paste YouTube URL or Drop Local File...", juce::Colour(0xff8ab4d0));
     urlInput.setMultiLine(false);
     urlInput.setReturnKeyStartsNewLine(false);
     urlInput.setFont(juce::FontOptions(16.0f));
+    urlInput.setIndents(8, 10); // Center text vertically in the 40px row
     addAndMakeVisible(urlInput);
     
     downloadBtn.onClick = [this]() {
@@ -24,7 +31,7 @@ SampleGrabAudioProcessorEditor::SampleGrabAudioProcessorEditor (SampleGrabAudioP
         currentUrl = urlInput.getText();
         if (currentUrl.isNotEmpty()) {
             statusLabel.setText("Status: Starting...", juce::dontSendNotification);
-            statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xffff0000)); // Solid Red
+            statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff2e6da4));
             // Specifically NOT clearing bpmLabel or keyLabel here so they persist between scans!
             dragZone.setFile("");
             startThread(); 
@@ -41,7 +48,7 @@ SampleGrabAudioProcessorEditor::SampleGrabAudioProcessorEditor (SampleGrabAudioP
     
     statusLabel.setJustificationType(juce::Justification::centred);
     statusLabel.setText("Status: Waiting for URL", juce::dontSendNotification);
-    statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xffaaaaaa));
+    statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff6a9ab8));
     statusLabel.setFont(juce::FontOptions(14.0f));
     addAndMakeVisible(statusLabel);
     
@@ -50,41 +57,41 @@ SampleGrabAudioProcessorEditor::SampleGrabAudioProcessorEditor (SampleGrabAudioP
     bpmTitleLabel.setJustificationType(juce::Justification::centred);
     bpmTitleLabel.setFont(juce::FontOptions(12.0f, juce::Font::bold));
     bpmTitleLabel.setText("TEMPO", juce::dontSendNotification);
-    bpmTitleLabel.setColour(juce::Label::textColourId, juce::Colour(0xff777777));
+    bpmTitleLabel.setColour(juce::Label::textColourId, juce::Colour(0xff7aadcc));
     addAndMakeVisible(bpmTitleLabel);
 
     bpmLabel.setJustificationType(juce::Justification::centred);
     bpmLabel.setFont(juce::FontOptions(28.0f, juce::Font::bold));
     bpmLabel.setText("--", juce::dontSendNotification);
-    bpmLabel.setColour(juce::Label::textColourId, juce::Colour(0xffff0000)); // solid red
+    bpmLabel.setColour(juce::Label::textColourId, juce::Colour(0xff2e6da4)); // deep blue
     addAndMakeVisible(bpmLabel);
     
     keyTitleLabel.setJustificationType(juce::Justification::centred);
     keyTitleLabel.setFont(juce::FontOptions(12.0f, juce::Font::bold));
     keyTitleLabel.setText("MUSICAL KEY", juce::dontSendNotification);
-    keyTitleLabel.setColour(juce::Label::textColourId, juce::Colour(0xff777777));
+    keyTitleLabel.setColour(juce::Label::textColourId, juce::Colour(0xff7aadcc));
     addAndMakeVisible(keyTitleLabel);
 
     keyLabel.setJustificationType(juce::Justification::centred);
     keyLabel.setFont(juce::FontOptions(28.0f, juce::Font::bold));
     keyLabel.setText("--", juce::dontSendNotification);
-    keyLabel.setColour(juce::Label::textColourId, juce::Colour(0xffff007f)); // bright magenta
+    keyLabel.setColour(juce::Label::textColourId, juce::Colour(0xff4a9ec5)); // sky blue
     addAndMakeVisible(keyLabel);
 
     keyDetailLabel.setJustificationType(juce::Justification::centred);
     keyDetailLabel.setFont(juce::FontOptions(12.5f, juce::Font::plain));
     keyDetailLabel.setText("", juce::dontSendNotification);
-    keyDetailLabel.setColour(juce::Label::textColourId, juce::Colour(0xffc0c0c0));
+    keyDetailLabel.setColour(juce::Label::textColourId, juce::Colour(0xff5a8aa8));
     addAndMakeVisible(keyDetailLabel);
     
-    // The play feature is now handled via the WaveformDragZone
+    // Restore last state
     if (audioProcessor.lastLoadedFile.isNotEmpty()) {
         bpmLabel.setText(audioProcessor.lastBpm, juce::dontSendNotification);
         keyLabel.setText(audioProcessor.lastKey, juce::dontSendNotification);
         keyDetailLabel.setText(buildKeyDetailText(audioProcessor.lastAlternateKey, audioProcessor.lastTuningDisplay), juce::dontSendNotification);
         dragZone.setFile(audioProcessor.lastLoadedFile);
         statusLabel.setText("Status: Ready", juce::dontSendNotification);
-        statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff55ff55));
+        statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff3a8a5c));
     }
     
     historyBtn.onClick = [this]() {
@@ -104,7 +111,7 @@ SampleGrabAudioProcessorEditor::SampleGrabAudioProcessorEditor (SampleGrabAudioP
     addAndMakeVisible(historyBtn);
     
     historyList.setModel(this);
-    historyList.setColour(juce::ListBox::backgroundColourId, juce::Colour(0xff111111));
+    historyList.setColour(juce::ListBox::backgroundColourId, juce::Colour(0x28ffffff));
     historyList.setRowHeight(48);
     historyList.setVisible(false);
     addChildComponent(historyList);
@@ -118,36 +125,67 @@ SampleGrabAudioProcessorEditor::~SampleGrabAudioProcessorEditor()
 {
     stopTimer();
     stopThread(2000);
-    audioProcessor.stopPreview(); // Stop playback when window is closed
+    audioProcessor.stopPreview();
     setLookAndFeel(nullptr);
 }
 
 void SampleGrabAudioProcessorEditor::timerCallback()
 {
-    // Force the waveform to repaint frequently to display the playback head or icon correctly
     dragZone.repaint();
 }
 
 void SampleGrabAudioProcessorEditor::paint (juce::Graphics& g)
 {
-    // Solid dark background
-    g.setColour(juce::Colour(0xff121212));
-    g.fillAll();
+    // Draw the light blue gradient background image
+    if (backgroundImage.isValid())
+    {
+        g.drawImage(backgroundImage, getLocalBounds().toFloat(),
+                    juce::RectanglePlacement::stretchToFit);
+    }
+    else
+    {
+        // Fallback: programmatic gradient
+        juce::ColourGradient bg(juce::Colour(0xffd4e8f7), getWidth() * 0.4f, getHeight() * 0.3f,
+                                juce::Colour(0xffb0cfe8), 0.0f, (float)getHeight(), true);
+        g.setGradientFill(bg);
+        g.fillAll();
+    }
     
+    // Draw the logo image in the title area
+    if (logoImage.isValid())
+    {
+        auto logoArea = getLocalBounds().reduced(24).removeFromTop(45);
+        // Scale logo to fit height while maintaining aspect ratio
+        float logoAspect = (float)logoImage.getWidth() / (float)logoImage.getHeight();
+        float logoHeight = (float)logoArea.getHeight();
+        float logoWidth = logoHeight * logoAspect;
+        auto logoBounds = juce::Rectangle<float>(
+            logoArea.getCentreX() - logoWidth / 2.0f,
+            logoArea.getY() + (logoArea.getHeight() - logoHeight) / 2.0f,
+            logoWidth, logoHeight);
+        g.drawImage(logoImage, logoBounds,
+                    juce::RectanglePlacement::centred | juce::RectanglePlacement::onlyReduceInSize);
+    }
+    
+    // Progress bar (liquid glass style)
     if (isDownloading)
     {
         auto bounds = statusLabel.getBounds().toFloat();
         bounds.translate(0, bounds.getHeight() + 2.0f);
         bounds.setHeight(4.0f);
         
-        g.setColour(juce::Colour(0xff222222));
+        // Track background
+        g.setColour(juce::Colour(0x30ffffff));
         g.fillRoundedRectangle(bounds, 2.0f);
         
         if (downloadProgress >= 0.0)
         {
             auto fillBounds = bounds;
             fillBounds.setWidth(bounds.getWidth() * (float)downloadProgress);
-            g.setColour(juce::Colour(0xffff0000));
+            // Blue gradient progress fill
+            juce::ColourGradient progressGrad(juce::Colour(0xff4a9ec5), fillBounds.getX(), 0,
+                                               juce::Colour(0xff2e6da4), fillBounds.getRight(), 0, false);
+            g.setGradientFill(progressGrad);
             g.fillRoundedRectangle(fillBounds, 2.0f);
         }
     }
@@ -181,14 +219,13 @@ void SampleGrabAudioProcessorEditor::resized()
     auto rightStats = statsArea;
     
     bpmTitleLabel.setBounds(leftStats.removeFromTop(24).withTrimmedTop(8));
-    bpmLabel.setBounds(leftStats.reduced(0, 4));
+    bpmLabel.setBounds(leftStats.removeFromTop(36));
     
     keyTitleLabel.setBounds(rightStats.removeFromTop(24).withTrimmedTop(8));
     keyLabel.setBounds(rightStats.removeFromTop(36));
     keyDetailLabel.setBounds(rightStats.withTrimmedBottom(6));
     
     area.removeFromTop(15);
-    // playBtn removed, the space is now given to the waveform drag zone natively
     
     auto historyAreaRow = area.removeFromTop(30);
     historyBtn.setBounds(historyAreaRow.removeFromRight(100));
@@ -255,7 +292,7 @@ void SampleGrabAudioProcessorEditor::run()
                                 juce::MessageManager::callAsync([safeThis = juce::Component::SafePointer<SampleGrabAudioProcessorEditor>(this), err]() {
                                     if (auto* editor = safeThis.getComponent()) {
                                         editor->statusLabel.setText("Error: " + err, juce::dontSendNotification);
-                                        editor->statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xffff5555));
+                                        editor->statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xffcc4444));
                                         editor->isDownloading = false;
                                         editor->repaint();
                                     }
@@ -267,7 +304,7 @@ void SampleGrabAudioProcessorEditor::run()
                                     if (auto* editor = safeThis.getComponent()) {
                                         if (st.isNotEmpty()) {
                                             editor->statusLabel.setText("Status: " + st, juce::dontSendNotification);
-                                            editor->statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xffff0000));
+                                            editor->statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff2e6da4));
                                         }
                                         editor->downloadProgress = p / 100.0;
                                         editor->repaint();
@@ -278,7 +315,7 @@ void SampleGrabAudioProcessorEditor::run()
                                 juce::MessageManager::callAsync([safeThis = juce::Component::SafePointer<SampleGrabAudioProcessorEditor>(this), st]() {
                                     if (auto* editor = safeThis.getComponent()) {
                                         editor->statusLabel.setText("Status: " + st, juce::dontSendNotification);
-                                        editor->statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xffff0000));
+                                        editor->statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff2e6da4));
                                         editor->downloadProgress = -1.0;
                                         editor->repaint();
                                     }
@@ -298,7 +335,7 @@ void SampleGrabAudioProcessorEditor::run()
                                 juce::MessageManager::callAsync([safeThis = juce::Component::SafePointer<SampleGrabAudioProcessorEditor>(this), file, bpm, primaryKey, alternateKey, displayKey, tuningDisplay]() {
                                     if (auto* editor = safeThis.getComponent()) {
                                         editor->statusLabel.setText("Status: Analysis Complete!", juce::dontSendNotification);
-                                        editor->statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff55ff55));
+                                        editor->statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff3a8a5c));
                                         editor->applyAnalysisResult(file, bpm, primaryKey, alternateKey, displayKey, tuningDisplay);
                                         editor->isDownloading = false;
                                         editor->downloadProgress = -1.0;
@@ -327,7 +364,7 @@ void SampleGrabAudioProcessorEditor::run()
             if (auto* editor = safeThis.getComponent()) {
                 if (editor->isDownloading) {
                     editor->statusLabel.setText("Error: Python closed unexpectedly (Code " + juce::String(exitCode) + ")", juce::dontSendNotification);
-                    editor->statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xffff5555));
+                    editor->statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xffcc4444));
                     editor->isDownloading = false;
                     editor->repaint();
                 }
@@ -339,7 +376,7 @@ void SampleGrabAudioProcessorEditor::run()
         juce::MessageManager::callAsync([safeThis = juce::Component::SafePointer<SampleGrabAudioProcessorEditor>(this)]() {
             if (auto* editor = safeThis.getComponent()) {
                 editor->statusLabel.setText("Status: Failed to start Python process.", juce::dontSendNotification);
-                editor->statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xffff5555));
+                editor->statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xffcc4444));
                 editor->isDownloading = false;
                 editor->repaint();
             }
@@ -455,18 +492,20 @@ void SampleGrabAudioProcessorEditor::paintListBoxItem(int rowNumber, juce::Graph
     auto bounds = juce::Rectangle<int>(0, 0, width, height).toFloat();
     
     if (rowIsSelected) {
-        g.setColour(juce::Colour(0xff333333));
+        g.setColour(juce::Colour(0x38ffffff));
         g.fillRoundedRectangle(bounds.reduced(2.0f), 5.0f);
     }
     
     auto& item = historyItems.getReference(rowNumber);
     
-    g.setColour(juce::Colours::white);
+    // Filename in dark navy
+    g.setColour(juce::Colour(0xff1a3a5c));
     g.setFont(juce::FontOptions(14.0f, juce::Font::bold));
     juce::String filename = juce::File(item.file).getFileName();
     g.drawText(filename, 10, 2, width - 20, 20, juce::Justification::centredLeft, true);
     
-    g.setColour(juce::Colour(0xffaaaaaa));
+    // Detail text in blue-gray
+    g.setColour(juce::Colour(0xff5a8aa8));
     g.setFont(juce::FontOptions(12.0f));
     juce::String detail = item.bpm + " BPM";
     if (item.displayKey.isNotEmpty())
@@ -477,7 +516,8 @@ void SampleGrabAudioProcessorEditor::paintListBoxItem(int rowNumber, juce::Graph
         detail << " | " << item.tuningDisplay;
     g.drawText(detail, 10, 22, width - 20, 16, juce::Justification::centredLeft, true);
     
-    g.setColour(juce::Colour(0xff222222));
+    // Separator — subtle glass line
+    g.setColour(juce::Colour(0x22ffffff));
     g.drawLine(10.0f, (float)height - 1.0f, (float)width - 10.0f, (float)height - 1.0f, 1.0f);
 }
 
