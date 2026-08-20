@@ -6,18 +6,101 @@ import shutil
 import sys
 import time
 import warnings
+from urllib.parse import parse_qs, urlparse
 
 
 def is_tool_installed(name):
     return shutil.which(name) is not None
 
 
+YOUTUBE_HOSTS = {
+    "youtube.com",
+    "www.youtube.com",
+    "m.youtube.com",
+    "music.youtube.com",
+    "youtube-nocookie.com",
+    "www.youtube-nocookie.com",
+    "youtu.be",
+    "www.youtu.be",
+}
+
+
+class SourceValidationError(ValueError):
+    pass
+
+
+def normalize_source(source):
+    """Validate a local file/web URL and canonicalize supported YouTube links."""
+    source = source.strip().strip('"').strip("'")
+    if not source:
+        raise SourceValidationError("Enter a YouTube URL or drop an existing audio file.")
+
+    if os.path.isfile(source):
+        return source
+
+    lowered = source.lower()
+    if lowered.startswith(("youtube.com/", "www.youtube.com/", "m.youtube.com/", "music.youtube.com/", "youtu.be/")):
+        source = "https://" + source
+
+    parsed = urlparse(source)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        raise SourceValidationError("That is not a valid web URL or existing audio file.")
+
+    host = parsed.hostname.lower()
+    if host not in YOUTUBE_HOSTS:
+        return source
+
+    path_parts = [part for part in parsed.path.split("/") if part]
+    video_id = ""
+
+    if host in {"youtu.be", "www.youtu.be"} and path_parts:
+        video_id = path_parts[0]
+    elif path_parts and path_parts[0].lower() == "watch":
+        video_id = parse_qs(parsed.query).get("v", [""])[0]
+    elif len(path_parts) >= 2 and path_parts[0].lower() in {"shorts", "embed", "live"}:
+        video_id = path_parts[1]
+
+    if not re.fullmatch(r"[A-Za-z0-9_-]{6,20}", video_id):
+        raise SourceValidationError("This YouTube link does not contain a valid video ID.")
+
+    return f"https://www.youtube.com/watch?v={video_id}"
+
+
 def sanitize_url(url):
-    """Strip a YouTube playlist suffix so yt-dlp receives only the video URL."""
-    playlist_match = re.search(r"&list", url, flags=re.IGNORECASE)
-    if playlist_match:
-        url = url[:playlist_match.start()]
-    return url.strip()
+    """Backward-compatible alias used by older callers and tests."""
+    return normalize_source(url)
+
+
+def emit_error(code, message, details=None):
+    payload = {"error": message, "error_code": code}
+    if details:
+        payload["details"] = details
+    print(json.dumps(payload), flush=True)
+
+
+def friendly_download_error(exc):
+    message = str(exc)
+    lowered = message.lower()
+
+    if "http error 403" in lowered or "forbidden" in lowered:
+        return (
+            "youtube_forbidden",
+            "YouTube blocked the download (403). Update SampleGrab or disable any VPN/proxy, then retry.",
+        )
+    if "private video" in lowered:
+        return "private_video", "That video is private and cannot be downloaded."
+    if "video unavailable" in lowered or "not available" in lowered:
+        return "video_unavailable", "That video is unavailable or restricted in your region."
+    if "sign in" in lowered or "confirm you’re not a bot" in lowered or "confirm you're not a bot" in lowered:
+        return "youtube_verification", "YouTube requires browser verification for this video. Try another public video or retry later."
+    if "timed out" in lowered or "temporary failure" in lowered or "name resolution" in lowered:
+        return "network_error", "The network request timed out. Check your connection and try again."
+    if "unsupported url" in lowered:
+        return "unsupported_url", "This URL is not supported. Paste a direct YouTube video link."
+    if "ffmpeg" in lowered:
+        return "ffmpeg_error", "FFmpeg could not process the audio. Reinstall SampleGrab and try again."
+
+    return "download_failed", "The video could not be downloaded. Check that it is public and try again."
 
 
 def normalize_vector(vector, np):
@@ -238,17 +321,22 @@ def main():
         print(json.dumps({"error": "Usage: python backend.py <url> <output_dir>"}))
         return
 
-    url = sanitize_url(sys.argv[1])
+    try:
+        url = normalize_source(sys.argv[1])
+    except SourceValidationError as exc:
+        emit_error("invalid_source", str(exc))
+        return
+
     out_dir = sys.argv[2]
 
     if not is_tool_installed("ffmpeg"):
-        print(json.dumps({"error": "ffmpeg is not installed or not in System PATH. It is required by yt-dlp to extract audio."}))
+        emit_error("ffmpeg_missing", "FFmpeg is missing. Reinstall SampleGrab to repair the audio tools.")
         return
 
     try:
         import yt_dlp
     except ImportError:
-        print(json.dumps({"error": "yt-dlp not installed. Run: pip install yt-dlp"}))
+        emit_error("downloader_missing", "SampleGrab's downloader is missing. Reinstall SampleGrab to repair it.")
         return
 
     try:
@@ -256,7 +344,7 @@ def main():
         import numpy as np
         from scipy.ndimage import median_filter
     except ImportError:
-        print(json.dumps({"error": "analysis dependencies not installed. Run: pip install librosa numpy soundfile scipy"}))
+        emit_error("analysis_missing", "SampleGrab's analysis tools are missing. Reinstall SampleGrab to repair them.")
         return
 
     warnings.filterwarnings("ignore", category=UserWarning, module="librosa")
@@ -298,6 +386,11 @@ def main():
                 "quiet": True,
                 "no_warnings": True,
                 "noplaylist": True,
+                "source_address": "0.0.0.0",
+                "retries": 3,
+                "fragment_retries": 3,
+                "extractor_retries": 3,
+                "file_access_retries": 3,
                 "progress_hooks": [my_hook],
             }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -305,11 +398,12 @@ def main():
                 filename = ydl.prepare_filename(info)
                 audio_file = os.path.splitext(filename)[0] + ".flac"
         except Exception as exc:
-            print(json.dumps({"error": f"yt-dlp error: {str(exc)}"}))
+            code, message = friendly_download_error(exc)
+            emit_error(code, message, str(exc))
             return
 
         if not os.path.exists(audio_file):
-            print(json.dumps({"error": "Downloaded flac file not found."}))
+            emit_error("output_missing", "The download finished, but the converted audio file could not be found.")
             return
 
     print(json.dumps({"status": "Analyzing BPM and Key..."}), flush=True)
@@ -359,7 +453,7 @@ def main():
         import traceback
 
         err_msg = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-        print(json.dumps({"error": f"librosa error: {str(exc)}", "traceback": err_msg}), flush=True)
+        emit_error("analysis_failed", "The audio downloaded, but BPM and key analysis failed.", err_msg)
 
 
 if __name__ == "__main__":

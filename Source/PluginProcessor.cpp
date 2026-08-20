@@ -77,8 +77,38 @@ void SampleGrabAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
 bool SampleGrabAudioProcessor::hasEditor() const { return true; }
 juce::AudioProcessorEditor* SampleGrabAudioProcessor::createEditor() { return new SampleGrabAudioProcessorEditor (*this); }
-void SampleGrabAudioProcessor::getStateInformation (juce::MemoryBlock& destData) {}
-void SampleGrabAudioProcessor::setStateInformation (const void* data, int sizeInBytes) {}
+void SampleGrabAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
+{
+    juce::XmlElement state("SampleGrabState");
+    state.setAttribute("version", 1);
+    state.setAttribute("file", lastLoadedFile);
+    state.setAttribute("bpm", lastBpm);
+    state.setAttribute("key", lastKey);
+    state.setAttribute("alternateKey", lastAlternateKey);
+    state.setAttribute("tuning", lastTuningDisplay);
+    state.setAttribute("sourceUrl", lastSourceUrl);
+    copyXmlToBinary(state, destData);
+}
+
+void SampleGrabAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
+{
+    auto state = getXmlFromBinary(data, sizeInBytes);
+
+    if (state == nullptr || !state->hasTagName("SampleGrabState"))
+        return;
+
+    lastLoadedFile = state->getStringAttribute("file");
+    lastBpm = state->getStringAttribute("bpm", "--");
+    lastKey = state->getStringAttribute("key", "--");
+    lastAlternateKey = state->getStringAttribute("alternateKey");
+    lastTuningDisplay = state->getStringAttribute("tuning");
+    lastSourceUrl = state->getStringAttribute("sourceUrl");
+
+    if (juce::File(lastLoadedFile).existsAsFile())
+        loadFile(lastLoadedFile);
+    else
+        lastLoadedFile.clear();
+}
 
 void SampleGrabAudioProcessor::loadFile(const juce::String& path)
 {

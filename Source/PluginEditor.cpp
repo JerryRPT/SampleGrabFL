@@ -27,19 +27,37 @@ SampleGrabAudioProcessorEditor::SampleGrabAudioProcessorEditor (SampleGrabAudioP
     addAndMakeVisible(urlInput);
     
     downloadBtn.onClick = [this]() {
-        if (isThreadRunning()) return;
+        if (isDownloading) {
+            cancellationRequested.store(true);
+            signalThreadShouldExit();
+            backendProcess.kill();
+            statusLabel.setText("Status: Cancelling...", juce::dontSendNotification);
+            statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff6a9ab8));
+            downloadBtn.setButtonText("CANCELLING...");
+            downloadBtn.setEnabled(false);
+            return;
+        }
+
+        if (isThreadRunning())
+            return;
+
         currentUrl = sanitizeUrl(urlInput.getText());
-        if (currentUrl.isNotEmpty()) {
+        if (isValidSource(currentUrl)) {
             urlInput.setText(currentUrl, juce::dontSendNotification);
+            audioProcessor.lastSourceUrl = currentUrl;
             statusLabel.setText("Status: Starting...", juce::dontSendNotification);
             statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff2e6da4));
             isDownloading = true;
+            cancellationRequested.store(false);
             downloadProgress = 0.0;
             progressAnimationStartMs = juce::Time::getMillisecondCounterHiRes();
+            downloadBtn.setButtonText("CANCEL");
             // Specifically NOT clearing bpmLabel or keyLabel here so they persist between scans!
             dragZone.setFile("");
             repaint();
-            startThread(); 
+            startThread();
+        } else {
+            finishDownloadUi("Enter a valid web URL or drop an existing audio file.", juce::Colour(0xffcc4444));
         }
     };
     addAndMakeVisible(downloadBtn);
@@ -90,6 +108,9 @@ SampleGrabAudioProcessorEditor::SampleGrabAudioProcessorEditor (SampleGrabAudioP
     addAndMakeVisible(keyDetailLabel);
     
     // Restore last state
+    if (audioProcessor.lastSourceUrl.isNotEmpty())
+        urlInput.setText(audioProcessor.lastSourceUrl, juce::dontSendNotification);
+
     if (audioProcessor.lastLoadedFile.isNotEmpty()) {
         bpmLabel.setText(audioProcessor.lastBpm, juce::dontSendNotification);
         keyLabel.setText(audioProcessor.lastKey, juce::dontSendNotification);
@@ -129,6 +150,9 @@ SampleGrabAudioProcessorEditor::SampleGrabAudioProcessorEditor (SampleGrabAudioP
 SampleGrabAudioProcessorEditor::~SampleGrabAudioProcessorEditor()
 {
     stopTimer();
+    cancellationRequested.store(true);
+    signalThreadShouldExit();
+    backendProcess.kill();
     stopThread(2000);
     audioProcessor.stopPreview();
     setLookAndFeel(nullptr);
@@ -268,22 +292,23 @@ void SampleGrabAudioProcessorEditor::run()
     args.add(currentUrl);
     args.add(outDir.getFullPathName());
 
-    juce::ChildProcess process;
     juce::uint32 processFlags = juce::ChildProcess::wantStdOut | juce::ChildProcess::wantStdErr;
-    if (process.start(args, processFlags))
+    if (backendProcess.start(args, processFlags))
     {
-        juce::MessageManager::callAsync([safeThis = juce::Component::SafePointer<SampleGrabAudioProcessorEditor>(this), scriptPath = scriptFile.getFullPathName()]() {
+        juce::MessageManager::callAsync([safeThis = juce::Component::SafePointer<SampleGrabAudioProcessorEditor>(this)]() {
             if (auto* editor = safeThis.getComponent()) {
+                if (editor->cancellationRequested.load())
+                    return;
                 editor->statusLabel.setText("Status: Starting Python...", juce::dontSendNotification);
                 editor->repaint();
             }
         });
 
         juce::String buffer;
-        while (process.isRunning() && !threadShouldExit())
+        while (backendProcess.isRunning() && !threadShouldExit())
         {
             char bufferData[1024];
-            int bytesRead = process.readProcessOutput(bufferData, sizeof(bufferData));
+            int bytesRead = backendProcess.readProcessOutput(bufferData, sizeof(bufferData));
             if (bytesRead > 0) {
                 juce::String chunk(juce::String::fromUTF8(bufferData, bytesRead));
                 buffer += chunk;
@@ -302,16 +327,17 @@ void SampleGrabAudioProcessorEditor::run()
                                 juce::String err = obj->getProperty("error").toString();
                                 juce::MessageManager::callAsync([safeThis = juce::Component::SafePointer<SampleGrabAudioProcessorEditor>(this), err]() {
                                     if (auto* editor = safeThis.getComponent()) {
-                                        editor->statusLabel.setText("Error: " + err, juce::dontSendNotification);
-                                        editor->statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xffcc4444));
-                                        editor->isDownloading = false;
-                                        editor->repaint();
+                                        if (editor->cancellationRequested.load())
+                                            return;
+                                        editor->finishDownloadUi(err, juce::Colour(0xffcc4444));
                                     }
                                 });
                             } else if (obj->hasProperty("progress")) {
                                 juce::String st = obj->hasProperty("status") ? obj->getProperty("status").toString() : "";
                                 juce::MessageManager::callAsync([safeThis = juce::Component::SafePointer<SampleGrabAudioProcessorEditor>(this), st]() {
                                     if (auto* editor = safeThis.getComponent()) {
+                                        if (editor->cancellationRequested.load())
+                                            return;
                                         if (st.isNotEmpty()) {
                                             editor->statusLabel.setText("Status: " + st, juce::dontSendNotification);
                                             editor->statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff2e6da4));
@@ -323,6 +349,8 @@ void SampleGrabAudioProcessorEditor::run()
                                 juce::String st = obj->getProperty("status").toString();
                                 juce::MessageManager::callAsync([safeThis = juce::Component::SafePointer<SampleGrabAudioProcessorEditor>(this), st]() {
                                     if (auto* editor = safeThis.getComponent()) {
+                                        if (editor->cancellationRequested.load())
+                                            return;
                                         editor->statusLabel.setText("Status: " + st, juce::dontSendNotification);
                                         editor->statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff2e6da4));
                                         editor->repaint();
@@ -342,11 +370,15 @@ void SampleGrabAudioProcessorEditor::run()
                                 juce::String tuningDisplay = obj->hasProperty("tuning_display") ? obj->getProperty("tuning_display").toString() : "";
                                 juce::MessageManager::callAsync([safeThis = juce::Component::SafePointer<SampleGrabAudioProcessorEditor>(this), file, bpm, primaryKey, alternateKey, displayKey, tuningDisplay]() {
                                     if (auto* editor = safeThis.getComponent()) {
+                                        if (editor->cancellationRequested.load())
+                                            return;
                                         editor->statusLabel.setText("Status: Analysis Complete!", juce::dontSendNotification);
                                         editor->statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff3a8a5c));
                                         editor->applyAnalysisResult(file, bpm, primaryKey, alternateKey, displayKey, tuningDisplay);
                                         editor->isDownloading = false;
                                         editor->downloadProgress = -1.0;
+                                        editor->downloadBtn.setButtonText("DOWNLOAD");
+                                        editor->downloadBtn.setEnabled(true);
                                         editor->loadHistory();
                                         editor->repaint();
                                     }
@@ -357,25 +389,24 @@ void SampleGrabAudioProcessorEditor::run()
                         break;
                     }
                 }
-            } else if (!process.isRunning()) {
+            } else if (!backendProcess.isRunning()) {
                 break;
             }
             juce::Thread::sleep(20);
         }
         
-        if (threadShouldExit() && process.isRunning()) {
-            process.kill();
+        if (threadShouldExit() && backendProcess.isRunning()) {
+            backendProcess.kill();
         }
         
-        juce::uint32 exitCode = process.getExitCode();
-        juce::MessageManager::callAsync([safeThis = juce::Component::SafePointer<SampleGrabAudioProcessorEditor>(this), exitCode]() {
+        juce::uint32 exitCode = backendProcess.getExitCode();
+        const bool wasCancelled = cancellationRequested.load();
+        juce::MessageManager::callAsync([safeThis = juce::Component::SafePointer<SampleGrabAudioProcessorEditor>(this), exitCode, wasCancelled]() {
             if (auto* editor = safeThis.getComponent()) {
-                if (editor->isDownloading) {
-                    editor->statusLabel.setText("Error: Python closed unexpectedly (Code " + juce::String(exitCode) + ")", juce::dontSendNotification);
-                    editor->statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xffcc4444));
-                    editor->isDownloading = false;
-                    editor->repaint();
-                }
+                if (wasCancelled && editor->isDownloading)
+                    editor->finishDownloadUi("Download cancelled.", juce::Colour(0xff6a9ab8));
+                else if (editor->isDownloading)
+                    editor->finishDownloadUi("The download helper stopped unexpectedly (code " + juce::String(exitCode) + "). Try again.", juce::Colour(0xffcc4444));
             }
         });
     }
@@ -383,10 +414,7 @@ void SampleGrabAudioProcessorEditor::run()
     {
         juce::MessageManager::callAsync([safeThis = juce::Component::SafePointer<SampleGrabAudioProcessorEditor>(this)]() {
             if (auto* editor = safeThis.getComponent()) {
-                editor->statusLabel.setText("Status: Failed to start Python process.", juce::dontSendNotification);
-                editor->statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xffcc4444));
-                editor->isDownloading = false;
-                editor->repaint();
+                editor->finishDownloadUi("Python could not start. Reinstall SampleGrab and try again.", juce::Colour(0xffcc4444));
             }
         });
     }
@@ -410,13 +438,90 @@ juce::String SampleGrabAudioProcessorEditor::buildKeyDetailText(const juce::Stri
 
 juce::String SampleGrabAudioProcessorEditor::sanitizeUrl(const juce::String& url)
 {
-    auto sanitized = url.trim();
-    const auto playlistIndex = sanitized.indexOfIgnoreCase("&list");
+    auto sanitized = url.trim().unquoted();
 
-    if (playlistIndex >= 0)
-        sanitized = sanitized.substring(0, playlistIndex);
+    if (juce::File(sanitized).existsAsFile())
+        return sanitized;
+
+    if (sanitized.startsWithIgnoreCase("youtube.com/")
+        || sanitized.startsWithIgnoreCase("www.youtube.com/")
+        || sanitized.startsWithIgnoreCase("m.youtube.com/")
+        || sanitized.startsWithIgnoreCase("music.youtube.com/")
+        || sanitized.startsWithIgnoreCase("youtu.be/"))
+        sanitized = "https://" + sanitized;
+
+    const juce::URL parsed(sanitized);
+    const auto domain = parsed.getDomain().toLowerCase();
+    const bool isShortHost = domain == "youtu.be" || domain == "www.youtu.be";
+    const bool isYouTubeHost = isShortHost
+                               || domain == "youtube.com"
+                               || domain == "www.youtube.com"
+                               || domain == "m.youtube.com"
+                               || domain == "music.youtube.com"
+                               || domain == "youtube-nocookie.com"
+                               || domain == "www.youtube-nocookie.com";
+
+    if (!isYouTubeHost)
+        return sanitized;
+
+    juce::String videoId;
+    juce::StringArray pathParts;
+    pathParts.addTokens(parsed.getSubPath(false), "/", "");
+    pathParts.removeEmptyStrings();
+
+    if (isShortHost && !pathParts.isEmpty())
+    {
+        videoId = pathParts[0];
+    }
+    else if (!pathParts.isEmpty() && pathParts[0].equalsIgnoreCase("watch"))
+    {
+        const auto& names = parsed.getParameterNames();
+        const auto& values = parsed.getParameterValues();
+
+        for (int i = 0; i < names.size(); ++i)
+            if (names[i].equalsIgnoreCase("v"))
+                videoId = values[i];
+    }
+    else if (pathParts.size() >= 2
+             && (pathParts[0].equalsIgnoreCase("shorts")
+                 || pathParts[0].equalsIgnoreCase("embed")
+                 || pathParts[0].equalsIgnoreCase("live")))
+    {
+        videoId = pathParts[1];
+    }
+
+    videoId = videoId.trim();
+    if (videoId.length() >= 6 && videoId.length() <= 20
+        && videoId.containsOnly("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"))
+        return "https://www.youtube.com/watch?v=" + videoId;
 
     return sanitized;
+}
+
+bool SampleGrabAudioProcessorEditor::isValidSource(const juce::String& source)
+{
+    if (source.isEmpty())
+        return false;
+
+    if (juce::File(source).existsAsFile())
+        return true;
+
+    const juce::URL parsed(source);
+    return parsed.isWellFormed()
+           && parsed.getDomain().isNotEmpty()
+           && (parsed.getScheme().equalsIgnoreCase("http") || parsed.getScheme().equalsIgnoreCase("https"));
+}
+
+void SampleGrabAudioProcessorEditor::finishDownloadUi(const juce::String& message, juce::Colour colour)
+{
+    const auto prefix = colour == juce::Colour(0xffcc4444) ? "Error: " : "Status: ";
+    statusLabel.setText(prefix + message, juce::dontSendNotification);
+    statusLabel.setColour(juce::Label::textColourId, colour);
+    isDownloading = false;
+    downloadProgress = -1.0;
+    downloadBtn.setButtonText("DOWNLOAD");
+    downloadBtn.setEnabled(true);
+    repaint();
 }
 
 void SampleGrabAudioProcessorEditor::applyAnalysisResult(const juce::String& file,

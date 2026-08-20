@@ -45,6 +45,7 @@ public:
     juce::String lastKey = "--";
     juce::String lastAlternateKey;
     juce::String lastTuningDisplay;
+    juce::String lastSourceUrl;
     
     juce::AudioFormatManager formatManager;
 

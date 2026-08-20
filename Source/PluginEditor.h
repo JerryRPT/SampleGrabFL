@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include <atomic>
 #include "PluginProcessor.h"
 #include "BinaryData.h"
 
@@ -311,6 +312,8 @@ private:
     double downloadProgress = 0.0;
     double progressAnimationStartMs = 0.0;
     bool isDownloading = false;
+    std::atomic_bool cancellationRequested { false };
+    juce::ChildProcess backendProcess;
     
     StatsBox statsBox;
     juce::Label bpmTitleLabel;
@@ -344,6 +347,8 @@ private:
                              const juce::String& tuningDisplay);
     static juce::String buildKeyDetailText(const juce::String& alternateKey, const juce::String& tuningDisplay);
     static juce::String sanitizeUrl(const juce::String& url);
+    static bool isValidSource(const juce::String& source);
+    void finishDownloadUi(const juce::String& message, juce::Colour colour);
     
     // ListBoxModel overrides
     int getNumRows() override;
