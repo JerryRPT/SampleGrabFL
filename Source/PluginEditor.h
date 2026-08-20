@@ -308,7 +308,8 @@ private:
     FolderButton openFolderBtn;
     juce::Label statusLabel;
     
-    double downloadProgress = -1.0;
+    double downloadProgress = 0.0;
+    double progressAnimationStartMs = 0.0;
     bool isDownloading = false;
     
     StatsBox statsBox;
@@ -342,6 +343,7 @@ private:
                              const juce::String& displayKey,
                              const juce::String& tuningDisplay);
     static juce::String buildKeyDetailText(const juce::String& alternateKey, const juce::String& tuningDisplay);
+    static juce::String sanitizeUrl(const juce::String& url);
     
     // ListBoxModel overrides
     int getNumRows() override;

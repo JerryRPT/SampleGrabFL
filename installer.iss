@@ -1,6 +1,6 @@
 [Setup]
 AppName=SampleGrab
-AppVersion=1.0.2
+AppVersion=1.0.3
 AppPublisher=jerryrpt
 DefaultDirName={commonappdata}\jerryrpt\SampleGrab
 DefaultGroupName=SampleGrab

@@ -28,12 +28,17 @@ SampleGrabAudioProcessorEditor::SampleGrabAudioProcessorEditor (SampleGrabAudioP
     
     downloadBtn.onClick = [this]() {
         if (isThreadRunning()) return;
-        currentUrl = urlInput.getText();
+        currentUrl = sanitizeUrl(urlInput.getText());
         if (currentUrl.isNotEmpty()) {
+            urlInput.setText(currentUrl, juce::dontSendNotification);
             statusLabel.setText("Status: Starting...", juce::dontSendNotification);
             statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff2e6da4));
+            isDownloading = true;
+            downloadProgress = 0.0;
+            progressAnimationStartMs = juce::Time::getMillisecondCounterHiRes();
             // Specifically NOT clearing bpmLabel or keyLabel here so they persist between scans!
             dragZone.setFile("");
+            repaint();
             startThread(); 
         }
     };
@@ -131,6 +136,14 @@ SampleGrabAudioProcessorEditor::~SampleGrabAudioProcessorEditor()
 
 void SampleGrabAudioProcessorEditor::timerCallback()
 {
+    if (isDownloading)
+    {
+        constexpr double progressDurationMs = 7000.0;
+        const auto elapsedMs = juce::Time::getMillisecondCounterHiRes() - progressAnimationStartMs;
+        downloadProgress = juce::jlimit(0.0, 1.0, elapsedMs / progressDurationMs);
+        repaint();
+    }
+
     dragZone.repaint();
 }
 
@@ -262,8 +275,6 @@ void SampleGrabAudioProcessorEditor::run()
         juce::MessageManager::callAsync([safeThis = juce::Component::SafePointer<SampleGrabAudioProcessorEditor>(this), scriptPath = scriptFile.getFullPathName()]() {
             if (auto* editor = safeThis.getComponent()) {
                 editor->statusLabel.setText("Status: Starting Python...", juce::dontSendNotification);
-                editor->isDownloading = true;
-                editor->downloadProgress = -1.0;
                 editor->repaint();
             }
         });
@@ -298,15 +309,13 @@ void SampleGrabAudioProcessorEditor::run()
                                     }
                                 });
                             } else if (obj->hasProperty("progress")) {
-                                double p = static_cast<double>(obj->getProperty("progress"));
                                 juce::String st = obj->hasProperty("status") ? obj->getProperty("status").toString() : "";
-                                juce::MessageManager::callAsync([safeThis = juce::Component::SafePointer<SampleGrabAudioProcessorEditor>(this), p, st]() {
+                                juce::MessageManager::callAsync([safeThis = juce::Component::SafePointer<SampleGrabAudioProcessorEditor>(this), st]() {
                                     if (auto* editor = safeThis.getComponent()) {
                                         if (st.isNotEmpty()) {
                                             editor->statusLabel.setText("Status: " + st, juce::dontSendNotification);
                                             editor->statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff2e6da4));
                                         }
-                                        editor->downloadProgress = p / 100.0;
                                         editor->repaint();
                                     }
                                 });
@@ -316,7 +325,6 @@ void SampleGrabAudioProcessorEditor::run()
                                     if (auto* editor = safeThis.getComponent()) {
                                         editor->statusLabel.setText("Status: " + st, juce::dontSendNotification);
                                         editor->statusLabel.setColour(juce::Label::textColourId, juce::Colour(0xff2e6da4));
-                                        editor->downloadProgress = -1.0;
                                         editor->repaint();
                                     }
                                 });
@@ -398,6 +406,17 @@ juce::String SampleGrabAudioProcessorEditor::buildKeyDetailText(const juce::Stri
     }
 
     return detail;
+}
+
+juce::String SampleGrabAudioProcessorEditor::sanitizeUrl(const juce::String& url)
+{
+    auto sanitized = url.trim();
+    const auto playlistIndex = sanitized.indexOfIgnoreCase("&list");
+
+    if (playlistIndex >= 0)
+        sanitized = sanitized.substring(0, playlistIndex);
+
+    return sanitized;
 }
 
 void SampleGrabAudioProcessorEditor::applyAnalysisResult(const juce::String& file,

@@ -12,6 +12,14 @@ def is_tool_installed(name):
     return shutil.which(name) is not None
 
 
+def sanitize_url(url):
+    """Strip a YouTube playlist suffix so yt-dlp receives only the video URL."""
+    playlist_match = re.search(r"&list", url, flags=re.IGNORECASE)
+    if playlist_match:
+        url = url[:playlist_match.start()]
+    return url.strip()
+
+
 def normalize_vector(vector, np):
     vector = np.asarray(vector, dtype=float)
     norm = float(np.linalg.norm(vector))
@@ -230,7 +238,7 @@ def main():
         print(json.dumps({"error": "Usage: python backend.py <url> <output_dir>"}))
         return
 
-    url = sys.argv[1]
+    url = sanitize_url(sys.argv[1])
     out_dir = sys.argv[2]
 
     if not is_tool_installed("ffmpeg"):
